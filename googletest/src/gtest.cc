@@ -54,6 +54,11 @@
 #include <sstream>
 #include <vector>
 
+#include <thread>
+#include <list>
+#include <mutex>
+#include <condition_variable>
+
 #if GTEST_OS_LINUX
 
 # include <fcntl.h>  // NOLINT
@@ -2694,7 +2699,7 @@ Result HandleExceptionsInMethodIfSupported(
 
 // Runs the test and updates the test result.
 void Test::Run() {
-  if (!HasSameFixtureClass()) return;
+  // if (!HasSameFixtureClass()) return;
 
   internal::UnitTestImpl* const impl = internal::GetUnitTestImpl();
   impl->os_stack_trace_getter()->UponLeavingGTest();
@@ -3367,6 +3372,192 @@ static void PrintFullTestCommentIfPresent(const TestInfo& test_info) {
     }
   }
 }
+
+class ConcurrentResultPrinter : public TestEventListener {
+public:
+  // Fired before any test activity starts.
+  virtual void OnTestProgramStart(const UnitTest& unit_test) override {};
+
+  // Fired before each iteration of tests starts.  There may be more than
+  // one iteration if GTEST_FLAG(repeat) is set. iteration is the iteration
+  // index, starting from 0.
+  virtual void OnTestIterationStart(const UnitTest& unit_test, int iteration) override {
+    if (GTEST_FLAG_GET(repeat) != 1)
+      printf("\nRepeating all tests (iteration %d) . . .\n\n", iteration + 1);
+
+    std::string f = GTEST_FLAG_GET(filter);
+    const char* const filter = f.c_str();
+
+    // Prints the filter if it's not *.  This reminds the user that some
+    // tests may be skipped.
+    if (!String::CStringEquals(filter, kUniversalFilter)) {
+      ColoredPrintf(GTestColor::kYellow, "Note: %s filter = %s\n", GTEST_NAME_,
+                    filter);
+    }
+
+    if (internal::ShouldShard(kTestTotalShards, kTestShardIndex, false)) {
+      const int32_t shard_index = Int32FromEnvOrDie(kTestShardIndex, -1);
+      ColoredPrintf(GTestColor::kYellow, "Note: This is test shard %d of %s.\n",
+                    static_cast<int>(shard_index) + 1,
+                    internal::posix::GetEnv(kTestTotalShards));
+    }
+
+    if (GTEST_FLAG_GET(shuffle)) {
+      ColoredPrintf(GTestColor::kYellow,
+                    "Note: Randomizing tests' orders with a seed of %d .\n",
+                    unit_test.random_seed());
+    }
+
+    ColoredPrintf(GTestColor::kGreen, "[==========] ");
+    printf("Running %s from %s.\n",
+           FormatTestCount(unit_test.test_to_run_count()).c_str(),
+           FormatTestSuiteCount(unit_test.test_suite_to_run_count()).c_str());
+  }
+
+  // Fired before environment set-up for each iteration of tests starts.
+  virtual void OnEnvironmentsSetUpStart(const UnitTest& unit_test) override {
+    ColoredPrintf(GTestColor::kGreen, "[----------] ");
+    printf("Global test environment set-up.\n");
+  }
+
+  // Fired after environment set-up for each iteration of tests ends.
+  virtual void OnEnvironmentsSetUpEnd(const UnitTest& unit_test) override {}
+
+  // Fired before the test suite starts.
+  virtual void OnTestSuiteStart(const TestSuite& test_suite) override {
+    const std::string counts = FormatCountableNoun(test_suite.test_to_run_count(), "test", "tests");
+    ColoredPrintf(GTestColor::kGreen, "[----------] ");
+    printf("%s from %s", counts.c_str(), test_suite.name());
+    if (test_suite.type_param() == nullptr) {
+      printf("\n");
+    } else {
+      printf(", where %s = %s\n", kTypeParamLabel, test_suite.type_param());
+    }
+  }
+
+  //  Legacy API is deprecated but still available
+#ifndef GTEST_REMOVE_LEGACY_TEST_CASEAPI_
+  virtual void OnTestCaseStart(const TestCase& /*test_case*/) override {}
+#endif  //  GTEST_REMOVE_LEGACY_TEST_CASEAPI_
+
+  // Fired before the test starts.
+  virtual void OnTestStart(const TestInfo& test_info) override {
+    ColoredPrintf(GTestColor::kGreen, "[ RUN      ] ");
+    PrintTestName(test_info.test_suite_name(), test_info.name());
+    printf("\n");
+  }
+
+  // Fired after a failed assertion or a SUCCEED() invocation.
+  // If you want to throw an exception from this function to skip to the next
+  // TEST, it must be AssertionException defined above, or inherited from it.
+  virtual void OnTestPartResult(const TestPartResult& test_part_result) override {}
+
+  // Fired after the test ends.
+  virtual void OnTestEnd(const TestInfo& test_info) override {
+    if (test_info.result()->Passed()) {
+      ColoredPrintf(GTestColor::kGreen, "[       OK ] ");
+    } else if (test_info.result()->Skipped()) {
+      ColoredPrintf(GTestColor::kGreen, "[  SKIPPED ] ");
+    } else {
+      ColoredPrintf(GTestColor::kRed, "[  FAILED  ] ");
+    }
+    PrintTestName(test_info.test_suite_name(), test_info.name());
+    if (test_info.result()->Failed())
+      PrintFullTestCommentIfPresent(test_info);
+
+    if (GTEST_FLAG_GET(print_time)) {
+      printf(" (%s ms)\n", internal::StreamableToString(
+            test_info.result()->elapsed_time()).c_str());
+    } else {
+      printf("\n");
+    }
+  }
+
+  // Fired after the test suite ends.
+  virtual void OnTestSuiteEnd(const TestSuite& test_suite) override {
+    if (!GTEST_FLAG_GET(print_time)) return;
+
+    const std::string counts = FormatCountableNoun(test_suite.test_to_run_count(), "test", "tests");
+    ColoredPrintf(GTestColor::kGreen, "[----------] ");
+    printf("%s from %s (%s ms total)\n\n", counts.c_str(), test_suite.name(),
+          internal::StreamableToString(test_suite.elapsed_time()).c_str());
+    flush();
+  }
+
+//  Legacy API is deprecated but still available
+#ifndef GTEST_REMOVE_LEGACY_TEST_CASEAPI_
+  virtual void OnTestCaseEnd(const TestCase& /*test_case*/) override {}
+#endif  //  GTEST_REMOVE_LEGACY_TEST_CASEAPI_
+
+  // Fired before environment tear-down for each iteration of tests starts.
+  virtual void OnEnvironmentsTearDownStart(const UnitTest& unit_test) override {}
+
+  // Fired after environment tear-down for each iteration of tests ends.
+  virtual void OnEnvironmentsTearDownEnd(const UnitTest& unit_test) override {}
+
+  // Fired after each iteration of tests finishes.
+  virtual void OnTestIterationEnd(const UnitTest& unit_test, int iteration) override {}
+
+  // Fired after all test activities have ended.
+  virtual void OnTestProgramEnd(const UnitTest& unit_test) override {}
+
+private:
+
+  inline std::stringstream& getStream() {
+    std::unique_lock<std::mutex> lock(thread_mutex_);
+    return streams_[std::this_thread::get_id()];
+  }
+
+  template <typename ...Args>
+  inline void printf(Args... args) {
+    char temp[1024];
+    ::snprintf(temp, sizeof(temp), args...);
+    auto& stream = getStream();
+    stream << temp;
+  }
+
+  template <typename ...Args>
+  inline void ColoredPrintf(GTestColor color, Args... args) {
+    // no color support yet
+    printf(args...);
+  }
+
+  inline void PrintTestName(const char* test_suite, const char* test) {
+    printf("%s.%s", test_suite, test);
+  }
+
+  void PrintFullTestCommentIfPresent(const TestInfo& test_info) {
+    const char* const type_param = test_info.type_param();
+    const char* const value_param = test_info.value_param();
+
+    if (type_param != nullptr || value_param != nullptr) {
+      printf(", where ");
+      if (type_param != nullptr) {
+        printf("%s = %s", kTypeParamLabel, type_param);
+        if (value_param != nullptr) printf(" and ");
+      }
+      if (value_param != nullptr) {
+        printf("%s = %s", kValueParamLabel, value_param);
+      }
+    }
+  }
+
+  void flush() {
+    std::unique_lock<std::mutex> lock(stream_mutex_);
+    auto& stream = getStream();
+    const auto str = stream.str();
+    stream = {};
+    std::cerr << str << std::flush;
+  }
+
+  static std::mutex stream_mutex_; // this is locked when accessing the output stream
+  static std::mutex thread_mutex_; // this is locked when accessing the map
+  static std::map<std::thread::id, std::stringstream> streams_;
+};
+
+std::mutex ConcurrentResultPrinter::stream_mutex_;
+std::mutex ConcurrentResultPrinter::thread_mutex_;
+std::map<std::thread::id, std::stringstream> ConcurrentResultPrinter::streams_;
 
 // This class implements the TestEventListener interface.
 //
@@ -5561,7 +5752,7 @@ UnitTestImpl::UnitTestImpl(UnitTest* parent)
 #endif
       // Will be overridden by the flag before first use.
       catch_exceptions_(false) {
-  listeners()->SetDefaultResultPrinter(new PrettyUnitTestResultPrinter);
+  listeners()->SetDefaultResultPrinter(new ConcurrentResultPrinter());
 }
 
 UnitTestImpl::~UnitTestImpl() {
@@ -5760,6 +5951,65 @@ TestSuite* UnitTestImpl::GetTestSuite(
 static void SetUpEnvironment(Environment* env) { env->SetUp(); }
 static void TearDownEnvironment(Environment* env) { env->TearDown(); }
 
+template <typename Callback = std::function<void()>>
+class Runner {
+public:
+
+  Runner(size_t count = std::thread::hardware_concurrency())
+  : stop_(false) {
+    for (size_t c = 0; c < count; ++c) {
+      threads_.emplace_back(&Runner::run, this, c);
+    }
+  }
+
+  ~Runner() {
+    std::unique_lock<std::mutex> lock{mutex_};
+    cond_.wait(lock, [this](){ return jobs_.empty(); });
+    stop_ = true;
+    cond_.notify_all();
+    lock.unlock();
+    for (auto& thread : threads_) {
+      thread.join();
+    }
+  }
+
+  void schedule(Callback&& cb) {
+    std::unique_lock<std::mutex> lock{mutex_};
+    jobs_.push_back(std::move(cb));
+    cond_.notify_all();
+  }
+
+  void schedule(const Callback& cb) {
+    std::unique_lock<std::mutex> lock{mutex_};
+    jobs_.push_back(cb);
+    cond_.notify_all();
+  }
+
+private:
+
+  void run(size_t index) {
+    std::unique_lock<std::mutex> lock{mutex_};
+    for (;;) {
+      cond_.wait(lock, [this](){ return stop_ or jobs_.size(); });
+      if (stop_) {
+        return;
+      }
+      auto job = std::move(jobs_.front());
+      jobs_.pop_front();
+      cond_.notify_all();
+      lock.unlock();
+      job();
+      lock.lock();
+    }
+  }
+
+  std::list<std::thread> threads_;
+  std::list<Callback> jobs_;
+  std::mutex mutex_;
+  std::condition_variable cond_;
+  bool stop_;
+};
+
 // Runs all tests in this UnitTest object, prints the result, and
 // returns true if all tests are successful.  If any exception is
 // thrown during a test, the test is considered to be failed, but the
@@ -5892,16 +6142,16 @@ bool UnitTestImpl::RunAllTests() {
         }
         fflush(stdout);
       } else if (!Test::HasFatalFailure()) {
-        for (int test_index = 0; test_index < total_test_suite_count();
-             test_index++) {
-          GetMutableSuiteCase(test_index)->Run();
-          if (GTEST_FLAG_GET(fail_fast) &&
-              GetMutableSuiteCase(test_index)->Failed()) {
-            for (int j = test_index + 1; j < total_test_suite_count(); j++) {
-              GetMutableSuiteCase(j)->Skip();
+
+        Runner<> runner(std::min(std::thread::hardware_concurrency(), static_cast<unsigned int>(total_test_suite_count())));
+
+        for (int test_index = 0; test_index < total_test_suite_count(); test_index++) {
+          runner.schedule([this, test_index](){
+            GetMutableSuiteCase(test_index)->Run();
+            if (GTEST_FLAG_GET(fail_fast) && GetMutableSuiteCase(test_index)->Failed()) {
+              std::cout << "fast failure unsupported yet\n";
             }
-            break;
-          }
+          });
         }
       } else if (Test::HasFatalFailure()) {
         // If there was a fatal failure during the global setup then we know we
