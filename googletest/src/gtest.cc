@@ -366,6 +366,10 @@ GTEST_DEFINE_string_(
     "This flag specifies the flagfile to read command-line flags from.");
 #endif  // GTEST_USE_OWN_FLAGFILE_FLAG_
 
+GTEST_DEFINE_int32_(
+    jobs, testing::internal::Int32FromGTestEnv("jobs", 1),
+    "Number of parallel threads to use for running the suites");
+
 namespace testing {
 namespace internal {
 
@@ -3373,7 +3377,7 @@ static void PrintFullTestCommentIfPresent(const TestInfo& test_info) {
   }
 }
 
-class ConcurrentResultPrinter : public TestEventListener {
+class ConcurrentPrettyResultPrinter : public TestEventListener {
 public:
   // Fired before any test activity starts.
   virtual void OnTestProgramStart(const UnitTest& unit_test) override {};
@@ -3459,7 +3463,6 @@ public:
       // Print failure message from the assertion
       // (e.g. expected this and got that).
       PrintTestPartResult(result);
-      fflush(stdout);
   }
   }
 
@@ -3519,12 +3522,17 @@ private:
     return streams_[std::this_thread::get_id()];
   }
 
+  // the real output primitive
+  inline void print(const char* msg) {
+    auto& stream = getStream();
+    stream << msg;
+  }
+
   template <typename ...Args>
   inline void printf(Args... args) {
     char temp[1024];
     ::snprintf(temp, sizeof(temp), args...);
-    auto& stream = getStream();
-    stream << temp;
+    print(temp);
   }
 
   template <typename ...Args>
@@ -3600,9 +3608,9 @@ private:
   static std::map<std::thread::id, std::stringstream> streams_;
 };
 
-std::mutex ConcurrentResultPrinter::stream_mutex_;
-std::mutex ConcurrentResultPrinter::thread_mutex_;
-std::map<std::thread::id, std::stringstream> ConcurrentResultPrinter::streams_;
+std::mutex ConcurrentPrettyResultPrinter::stream_mutex_;
+std::mutex ConcurrentPrettyResultPrinter::thread_mutex_;
+std::map<std::thread::id, std::stringstream> ConcurrentPrettyResultPrinter::streams_;
 
 // This class implements the TestEventListener interface.
 //
@@ -5797,8 +5805,11 @@ UnitTestImpl::UnitTestImpl(UnitTest* parent)
 #endif
       // Will be overridden by the flag before first use.
       catch_exceptions_(false) {
-  listeners()->SetDefaultResultPrinter(new ConcurrentResultPrinter());
-  //listeners()->SetDefaultResultPrinter(new PrettyUnitTestResultPrinter());
+  if (GTEST_FLAG_GET(jobs) > 1) {
+    listeners()->SetDefaultResultPrinter(new ConcurrentPrettyResultPrinter());
+  } else {
+    listeners()->SetDefaultResultPrinter(new PrettyUnitTestResultPrinter());
+  }
 }
 
 UnitTestImpl::~UnitTestImpl() {
@@ -5997,9 +6008,10 @@ TestSuite* UnitTestImpl::GetTestSuite(
 static void SetUpEnvironment(Environment* env) { env->SetUp(); }
 static void TearDownEnvironment(Environment* env) { env->TearDown(); }
 
-template <typename Callback = std::function<void()>>
 class Runner {
 public:
+
+  using Callback = std::function<void()>;
 
   Runner(size_t count = std::thread::hardware_concurrency())
   : stop_(false) {
@@ -6189,16 +6201,31 @@ bool UnitTestImpl::RunAllTests() {
         fflush(stdout);
       } else if (!Test::HasFatalFailure()) {
 
-        Runner<> runner(std::min(std::thread::hardware_concurrency(), static_cast<unsigned int>(total_test_suite_count())));
+        if (GTEST_FLAG_GET(jobs) > 1) {
+          Runner runner{size_t(GTEST_FLAG_GET(jobs))};
+          //Runner runner{std::min(std::thread::hardware_concurrency(), static_cast<unsigned int>(total_test_suite_count()))};
 
-        for (int test_index = 0; test_index < total_test_suite_count(); test_index++) {
-          runner.schedule([this, test_index](){
+          for (int test_index = 0; test_index < total_test_suite_count(); test_index++) {
+            runner.schedule([this, test_index](){
+              GetMutableSuiteCase(test_index)->Run();
+              if (GTEST_FLAG_GET(fail_fast) && GetMutableSuiteCase(test_index)->Failed()) {
+                std::cout << "fast failure unsupported yet\n";
+              }
+            });
+          }
+        } else {
+          for (int test_index = 0; test_index < total_test_suite_count(); test_index++) {
             GetMutableSuiteCase(test_index)->Run();
-            if (GTEST_FLAG_GET(fail_fast) && GetMutableSuiteCase(test_index)->Failed()) {
-              std::cout << "fast failure unsupported yet\n";
+            if (GTEST_FLAG_GET(fail_fast) &&
+                GetMutableSuiteCase(test_index)->Failed()) {
+              for (int j = test_index + 1; j < total_test_suite_count(); j++) {
+                GetMutableSuiteCase(j)->Skip();
+              }
+              break;
             }
-          });
+          }
         }
+
       } else if (Test::HasFatalFailure()) {
         // If there was a fatal failure during the global setup then we know we
         // aren't going to run any tests. Explicitly mark all of the tests as
@@ -6874,6 +6901,7 @@ static bool ParseGoogleTestFlag(const char* const arg) {
   GTEST_INTERNAL_PARSE_FLAG(stack_trace_depth);
   GTEST_INTERNAL_PARSE_FLAG(stream_result_to);
   GTEST_INTERNAL_PARSE_FLAG(throw_on_failure);
+  GTEST_INTERNAL_PARSE_FLAG(jobs);
   return false;
 }
 

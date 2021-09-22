@@ -156,6 +156,10 @@ GTEST_DECLARE_string_(stream_result_to);
 GTEST_DECLARE_string_(flagfile);
 #endif  // GTEST_USE_OWN_FLAGFILE_FLAG_
 
+// This flag specifies the number of threads to use to run the suites
+// printed in a failure message.
+GTEST_DECLARE_int32_(jobs);
+
 namespace testing {
 
 // Silence C4100 (unreferenced formal parameter) and 4805
