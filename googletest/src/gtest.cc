@@ -3529,8 +3529,26 @@ private:
 
   template <typename ...Args>
   inline void ColoredPrintf(GTestColor color, Args... args) {
-    // no color support yet
+
+  #if GTEST_OS_WINDOWS_MOBILE || GTEST_OS_ZOS || GTEST_OS_IOS || \
+      GTEST_OS_WINDOWS_PHONE || GTEST_OS_WINDOWS_RT || defined(ESP_PLATFORM) || \
+      GTEST_OS_WINDOWS && !GTEST_OS_WINDOWS_MOBILE && \
+      !GTEST_OS_WINDOWS_PHONE && !GTEST_OS_WINDOWS_RT && !GTEST_OS_WINDOWS_MINGW
+    const bool use_color = AlwaysFalse();
+  #else
+    static const bool in_color_mode =
+        ShouldUseColor(posix::IsATTY(posix::FileNo(stdout)) != 0);
+    const bool use_color = in_color_mode && (color != GTestColor::kDefault);
+  #endif  // GTEST_OS_WINDOWS_MOBILE || GTEST_OS_ZOS
+
+    if (!use_color) {
+      printf(args...);
+      return;
+    }
+
+    printf("\033[0;3%sm", GetAnsiColorCode(color));
     printf(args...);
+    printf("\033[m");  // Resets the terminal to default.
   }
 
   inline void PrintTestName(const char* test_suite, const char* test) {
