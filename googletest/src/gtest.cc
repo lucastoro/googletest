@@ -3450,7 +3450,18 @@ public:
   // Fired after a failed assertion or a SUCCEED() invocation.
   // If you want to throw an exception from this function to skip to the next
   // TEST, it must be AssertionException defined above, or inherited from it.
-  virtual void OnTestPartResult(const TestPartResult& test_part_result) override {}
+  virtual void OnTestPartResult(const TestPartResult& result) override {
+    switch (result.type()) {
+    // If the test part succeeded, we don't need to do anything.
+    case TestPartResult::kSuccess:
+      return;
+    default:
+      // Print failure message from the assertion
+      // (e.g. expected this and got that).
+      PrintTestPartResult(result);
+      fflush(stdout);
+  }
+  }
 
   // Fired after the test ends.
   virtual void OnTestEnd(const TestInfo& test_info) override {
@@ -3540,6 +3551,22 @@ private:
         printf("%s = %s", kValueParamLabel, value_param);
       }
     }
+  }
+
+  void PrintTestPartResult(const TestPartResult& test_part_result) {
+    const std::string& result = PrintTestPartResultToString(test_part_result);
+    printf("%s\n", result.c_str());
+    // If the test program runs in Visual Studio or a debugger, the
+    // following statements add the test part result message to the Output
+    // window such that the user can double-click on it to jump to the
+    // corresponding source code location; otherwise they do nothing.
+  #if GTEST_OS_WINDOWS && !GTEST_OS_WINDOWS_MOBILE
+    // We don't call OutputDebugString*() on Windows Mobile, as printing
+    // to stdout is done by OutputDebugString() there already - we don't
+    // want the same message printed twice.
+    ::OutputDebugStringA(result.c_str());
+    ::OutputDebugStringA("\n");
+  #endif
   }
 
   void flush() {
@@ -5753,6 +5780,7 @@ UnitTestImpl::UnitTestImpl(UnitTest* parent)
       // Will be overridden by the flag before first use.
       catch_exceptions_(false) {
   listeners()->SetDefaultResultPrinter(new ConcurrentResultPrinter());
+  //listeners()->SetDefaultResultPrinter(new PrettyUnitTestResultPrinter());
 }
 
 UnitTestImpl::~UnitTestImpl() {
