@@ -2703,7 +2703,12 @@ Result HandleExceptionsInMethodIfSupported(
 
 // Runs the test and updates the test result.
 void Test::Run() {
-  // if (!HasSameFixtureClass()) return;
+
+  // this is not thread safe currently
+  if (GTEST_FLAG_GET(jobs) < 2 &&
+      !HasSameFixtureClass()) {
+    return;
+  }
 
   internal::UnitTestImpl* const impl = internal::GetUnitTestImpl();
   impl->os_stack_trace_getter()->UponLeavingGTest();
@@ -3600,7 +3605,7 @@ private:
     auto& stream = getStream();
     const auto str = stream.str();
     stream = {};
-    std::cerr << str << std::flush;
+    std::cout << str << std::flush;
   }
 
   static std::mutex stream_mutex_; // this is locked when accessing the output stream
@@ -5805,11 +5810,7 @@ UnitTestImpl::UnitTestImpl(UnitTest* parent)
 #endif
       // Will be overridden by the flag before first use.
       catch_exceptions_(false) {
-  if (GTEST_FLAG_GET(jobs) > 1) {
-    listeners()->SetDefaultResultPrinter(new ConcurrentPrettyResultPrinter());
-  } else {
-    listeners()->SetDefaultResultPrinter(new PrettyUnitTestResultPrinter());
-  }
+  listeners()->SetDefaultResultPrinter(new ConcurrentPrettyResultPrinter());
 }
 
 UnitTestImpl::~UnitTestImpl() {
