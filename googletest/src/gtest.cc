@@ -3250,6 +3250,19 @@ static WORD GetNewColor(GTestColor color, WORD old_color_attrs) {
   return new_color;
 }
 
+static const char* GetAnsiColorCode(GTestColor color) {
+  switch (color) {
+    case GTestColor::kRed:
+      return "1";
+    case GTestColor::kGreen:
+      return "2";
+    case GTestColor::kYellow:
+      return "3";
+    default:
+      return nullptr;
+  }
+}
+
 #else
 
 // Returns the ANSI color code for the given color. GTestColor::kDefault is
@@ -3385,7 +3398,7 @@ static void PrintFullTestCommentIfPresent(const TestInfo& test_info) {
 class ConcurrentPrettyResultPrinter : public TestEventListener {
 public:
   // Fired before any test activity starts.
-  virtual void OnTestProgramStart(const UnitTest& unit_test) override {};
+  virtual void OnTestProgramStart(const UnitTest& /*unit_test*/) override {};
 
   // Fired before each iteration of tests starts.  There may be more than
   // one iteration if GTEST_FLAG(repeat) is set. iteration is the iteration
@@ -3424,13 +3437,13 @@ public:
   }
 
   // Fired before environment set-up for each iteration of tests starts.
-  virtual void OnEnvironmentsSetUpStart(const UnitTest& unit_test) override {
+  virtual void OnEnvironmentsSetUpStart(const UnitTest& /*unit_test*/) override {
     ColoredPrintf(GTestColor::kGreen, "[----------] ");
     printf("Global test environment set-up.\n");
   }
 
   // Fired after environment set-up for each iteration of tests ends.
-  virtual void OnEnvironmentsSetUpEnd(const UnitTest& unit_test) override {}
+  virtual void OnEnvironmentsSetUpEnd(const UnitTest& /*unit_test*/) override {}
 
   // Fired before the test suite starts.
   virtual void OnTestSuiteStart(const TestSuite& test_suite) override {
@@ -3509,16 +3522,16 @@ public:
 #endif  //  GTEST_REMOVE_LEGACY_TEST_CASEAPI_
 
   // Fired before environment tear-down for each iteration of tests starts.
-  virtual void OnEnvironmentsTearDownStart(const UnitTest& unit_test) override {}
+  virtual void OnEnvironmentsTearDownStart(const UnitTest& /*unit_test*/) override {}
 
   // Fired after environment tear-down for each iteration of tests ends.
-  virtual void OnEnvironmentsTearDownEnd(const UnitTest& unit_test) override {}
+  virtual void OnEnvironmentsTearDownEnd(const UnitTest& /*unit_test*/) override {}
 
   // Fired after each iteration of tests finishes.
-  virtual void OnTestIterationEnd(const UnitTest& unit_test, int iteration) override {}
+  virtual void OnTestIterationEnd(const UnitTest& /*unit_test*/, int /*iteration*/) override {}
 
   // Fired after all test activities have ended.
-  virtual void OnTestProgramEnd(const UnitTest& unit_test) override {}
+  virtual void OnTestProgramEnd(const UnitTest& /*unit_test*/) override {}
 
 private:
 
@@ -6046,10 +6059,15 @@ public:
 
 private:
 
-  void run(size_t index) {
+  Runner(const Runner&) = delete;
+  Runner(Runner&&) = delete;
+  Runner& operator = (const Runner&) = delete;
+  Runner& operator = (Runner&&) = delete;
+
+  void run(size_t /*index*/) {
     std::unique_lock<std::mutex> lock{mutex_};
     for (;;) {
-      cond_.wait(lock, [this](){ return stop_ or jobs_.size(); });
+      cond_.wait(lock, [this](){ return stop_ || jobs_.size(); });
       if (stop_) {
         return;
       }
